@@ -6,6 +6,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
+import { useSafeSelect } from '../hooks/useSafeSelect';
 
 const DEPARTMENTS = [
   'Todos los departamentos',
@@ -39,10 +40,19 @@ interface DepartmentFilterProps {
 }
 
 export function DepartmentFilter({ value, onChange }: DepartmentFilterProps) {
+  const { handleValueChange, isTransitioning } = useSafeSelect(value);
+
+  const handleChange = (newValue: string) => {
+    handleValueChange(newValue);
+    if (!isTransitioning) {
+      onChange(newValue);
+    }
+  };
+
   return (
     <div className="flex items-center gap-2">
       <MapPin className="w-4 h-4 text-[#4997D0]" />
-      <Select value={value} onValueChange={onChange}>
+      <Select value={value} onValueChange={handleChange} disabled={isTransitioning}>
         <SelectTrigger className="h-9 w-[200px] bg-background border-border text-sm">
           <SelectValue placeholder="Filtrar por departamento" />
         </SelectTrigger>

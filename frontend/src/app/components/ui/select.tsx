@@ -60,6 +60,16 @@ function SelectContent({
   position = "popper",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  // Safety for Android: Ensure DOM is ready before rendering portal
+  const [isSafeToRender, setIsSafeToRender] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsSafeToRender(true);
+  }, []);
+
+  // Prevent rendering during unmount on Android
+  if (!isSafeToRender) return null;
+
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content

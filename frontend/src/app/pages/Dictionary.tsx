@@ -16,6 +16,7 @@ import { BookOpen, Search, Video, Filter, Play, Palette, PawPrint, Apple, Hand }
 import { api } from '../../services/api';
 import { toYouTubeThumbnailUrl } from '../../services/youtube';
 import { MainLayout } from '../layouts/MainLayout';
+import { useSafeSelect } from '../hooks/useSafeSelect';
 
 interface DictionaryWord {
   id: string;
@@ -36,6 +37,7 @@ export function Dictionary() {
   const navigate = useNavigate();
   const location = useLocation();
   const [selectedCategory, setSelectedCategory] = useState('');
+  const { handleValueChange: handleCategoryChange, isTransitioning } = useSafeSelect(selectedCategory);
   const [searchInput, setSearchInput] = useState('');
   const [activeSearchQuery, setActiveSearchQuery] = useState('');
   const [selectedWord, setSelectedWord] = useState<DictionaryWord | null>(null);
@@ -305,6 +307,7 @@ export function Dictionary() {
                 <Select
                   value={selectedCategory}
                   onValueChange={(value) => {
+                    handleCategoryChange(value);
                     setSelectedCategory(value);
                     setSearchInput('');
                     setTimeout(() => {
@@ -318,6 +321,7 @@ export function Dictionary() {
                       });
                     }, 0);
                   }}
+                  disabled={isTransitioning}
                 >
                   <SelectTrigger className="h-10 md:h-11 bg-background dark:bg-[#171717] border border-border dark:border-[#313131] text-xs md:text-sm">
                     <SelectValue placeholder="Selecciona una categoría" />

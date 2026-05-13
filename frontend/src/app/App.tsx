@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { RouterProvider } from 'react-router';
 import { router } from './routes';
 import { SplashScreen } from './components/SplashScreen';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -21,5 +22,9 @@ export default function App() {
     return <SplashScreen fadeOut={fadeOut} />;
   }
 
-  return <RouterProvider router={router} />;
+  return (
+    <ErrorBoundary>
+      <RouterProvider router={router} />
+    </ErrorBoundary>
+  );
 }
