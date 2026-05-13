@@ -1,0 +1,682 @@
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router';
+import { Sidebar, Conversation } from '../components/Sidebar';
+import { Navbar } from '../components/Navbar';
+import { ChatMessage, Message } from '../components/ChatMessage';
+import { WordNotFoundDialog } from '../components/WordNotFoundDialog';
+import { WelcomeChatBubble } from '../components/WelcomeChatBubble';
+import { QuetzalTipFloating } from '../components/QuetzalTipFloating';
+import { InputWithSuggestions } from '../components/InputWithSuggestions';
+import { BottomNav } from '../components/BottomNav';
+import { Button } from '../components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
+import { Send, BookOpen } from 'lucide-react';
+import { api } from '../../services/api';
+
+// Sin "Mixta"
+const WELCOME_CATEGORIES = [
+  { id: 'abecedario', label: 'Abecedario' },
+  { id: 'saludos', label: 'Saludos' },
+  { id: 'colores', label: 'Colores' },
+  { id: 'animales', label: 'Animales' },
+  { id: 'alimentos', label: 'Alimentos' },
+  { id: 'frases_comunes', label: 'Frases Comunes' },
+];
+
+const getConversationStorageKey = () => `segua_conversations_public`;
+const getCurrentConversationStorageKey = () => `segua_current_conversation_public`;
+const PUBLIC_USER = {
+  name: 'Visitante SEGUA',
+  email: 'public@segua.local',
+  avatar_url: null as string | null,
+};
+
+export function Chat() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [user, setUser] = useState<typeof PUBLIC_USER>(PUBLIC_USER);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string>('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    const saved = localStorage.getItem('segua_sidebar_collapsed');
+    return saved ? JSON.parse(saved) : false;
+  });
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [notFoundWord, setNotFoundWord] = useState('');
+  const [showNotFoundDialog, setShowNotFoundDialog] = useState(false);
+  const [insertedGamePrompt, setInsertedGamePrompt] = useState(false);
+  const [correctResponseCount, setCorrectResponseCount] = useState(0);
+  const [showQuetzalTip, setShowQuetzalTip] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [conversationToDelete, setConversationToDelete] = useState('');
+  const [autoSendWord, setAutoSendWord] = useState<string>('');
+  const [showWelcomeBubble, setShowWelcomeBubble] = useState(true);
+
+  useEffect(() => {
+    const conversationsKey = getConversationStorageKey();
+    const currentConversationKey = getCurrentConversationStorageKey();
+
+    try {
+      const savedConversations = localStorage.getItem(conversationsKey);
+      if (savedConversations) {
+        const parsedConversations = JSON.parse(savedConversations) as Array<{
+          id: string;
+          name: string;
+          lastMessage: string;
+          timestamp: string;
+        }>;
+        setConversations(
+          parsedConversations.map((conv) => ({
+            ...conv,
+            timestamp: new Date(conv.timestamp),
+          }))
+        );
+      } else {
+        setConversations([]);
+      }
+    } catch {
+      setConversations([]);
+    }
+
+    const savedCurrentConversation = localStorage.getItem(currentConversationKey);
+    setCurrentConversationId(savedCurrentConversation || '');
+    setMessages([]);
+  }, []);
+
+  useEffect(() => {
+    if (!currentConversationId) return;
+    const exists = conversations.some((conv) => conv.id === currentConversationId);
+    if (!exists) {
+      setCurrentConversationId('');
+    }
+  }, [conversations, currentConversationId]);
+
+  useEffect(() => {
+    localStorage.setItem(getConversationStorageKey(), JSON.stringify(conversations));
+  }, [conversations]);
+
+  useEffect(() => {
+    localStorage.setItem(getCurrentConversationStorageKey(), currentConversationId);
+  }, [currentConversationId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    localStorage.setItem('segua_sidebar_collapsed', JSON.stringify(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
+
+  useEffect(() => {
+    if (messages.length > 0) {
+      setShowWelcomeBubble(false);
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const palabra = params.get('palabra');
+    if (palabra) {
+      setAutoSendWord(palabra);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [location.search]);
+
+  const enviarMensajeRef = useRef<((mensaje: string) => Promise<void>) | null>(null);
+
+  useEffect(() => {
+    if (autoSendWord && enviarMensajeRef.current) {
+      enviarMensajeRef.current(autoSendWord);
+      setAutoSendWord('');
+    }
+  }, [autoSendWord]);
+
+  const handleNewConversation = () => {
+    setCurrentConversationId('');
+    setMessages([]);
+    setInsertedGamePrompt(false);
+    setShowWelcomeBubble(true);
+  };
+
+  const handleSelectConversation = (id: string) => {
+    setCurrentConversationId(id);
+    setMessages([]);
+    setInsertedGamePrompt(false);
+    setShowWelcomeBubble(false);
+  };
+
+  const handleDeleteConversation = () => {
+    if (!conversationToDelete) return;
+    setConversations(conversations.filter(c => c.id !== conversationToDelete));
+    if (currentConversationId === conversationToDelete) {
+      setCurrentConversationId('');
+      setMessages([]);
+    }
+    setConversationToDelete('');
+    setShowDeleteDialog(false);
+  };
+
+  const handleDeleteConversationFromSidebar = (id: string) => {
+    setConversationToDelete(id);
+    setShowDeleteDialog(true);
+  };
+
+  const handleClearConversation = () => {
+    setMessages([]);
+    setInsertedGamePrompt(false);
+    setShowWelcomeBubble(true);
+    if (currentConversationId) {
+      setConversations(prev =>
+        prev.map(conv =>
+          conv.id === currentConversationId
+            ? { ...conv, lastMessage: '', timestamp: new Date() }
+            : conv
+        )
+      );
+    }
+  };
+
+  const handleNavbarSearch = async (query: string) => {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return;
+    setInputText(trimmedQuery);
+    await enviarMensaje(trimmedQuery);
+  };
+
+  const handleRequestWord = (word: string) => {
+    setNotFoundWord(word);
+    setShowNotFoundDialog(true);
+  };
+
+  const enviarMensaje = async (
+    mensaje: string,
+    claveDesambiguacion?: string,
+    textoUsuarioVisible?: string
+  ) => {
+    if (!mensaje.trim()) return;
+
+    enviarMensajeRef.current = enviarMensaje;
+
+    const patronAprender = /quiero\s+aprender\s+(?:la\s+)?palabra[\s:]+(.*)/i;
+    const patronComoDice = /(?:como|cómo)\s+se\s+dice\s+(?:la\s+)?palabra[\s:]*(.*)/i;
+    const patronComoDiceSimple = /(?:como|cómo)\s+se\s+dice[\s:]+(.*)/i;
+
+    const matchAprender = mensaje.match(patronAprender);
+    const matchComoDice = mensaje.match(patronComoDice);
+    const matchComoDiceSimple = mensaje.match(patronComoDiceSimple);
+
+    let mensajeActual = mensaje;
+    let mostrarTextoUsuario = textoUsuarioVisible || mensajeActual;
+
+    if (matchAprender && matchAprender[1]) {
+      const palabraAprender = matchAprender[1].trim();
+      mensajeActual = palabraAprender;
+      mostrarTextoUsuario = `Quiero aprender la palabra: ${palabraAprender}`;
+    } else if (matchComoDice && matchComoDice[1]) {
+      const palabraComoDice = matchComoDice[1].trim();
+      mensajeActual = palabraComoDice;
+      mostrarTextoUsuario = `¿Cómo se dice: ${palabraComoDice}?`;
+    } else if (matchComoDiceSimple && matchComoDiceSimple[1]) {
+      const palabraComoDice = matchComoDiceSimple[1].trim();
+      mensajeActual = palabraComoDice;
+      mostrarTextoUsuario = `¿Cómo se dice: ${palabraComoDice}?`;
+    }
+
+    // Reemplazar guiones bajos en el texto visible al usuario
+    mostrarTextoUsuario = mostrarTextoUsuario.replace(/_/g, ' ');
+
+    const userMessage: Message = {
+      id: `msg-${Date.now()}`,
+      type: 'user',
+      text: mostrarTextoUsuario,
+    };
+
+    const loadingMessage: Message = {
+      id: `msg-${Date.now()}-loading`,
+      type: 'system',
+      text: '',
+      isLoading: true,
+    };
+
+    setMessages((prev) => [...prev, userMessage, loadingMessage]);
+
+    try {
+      const hasCurrentConversation = conversations.some((conv) => conv.id === currentConversationId);
+      const conversationIdToUse = hasCurrentConversation ? currentConversationId : '';
+
+      const respuesta = await api.chat(
+        mensajeActual,
+        conversationIdToUse || undefined,
+        claveDesambiguacion
+      );
+
+      if (!conversationIdToUse && respuesta.conversacion_id) {
+        setCurrentConversationId(respuesta.conversacion_id);
+        const nuevaConv: Conversation = {
+          id: respuesta.conversacion_id,
+          name: mensajeActual.slice(0, 30),
+          lastMessage: mensajeActual,
+          timestamp: new Date(),
+        };
+        setConversations((prev) => [nuevaConv, ...prev]);
+      }
+
+      const shouldFetchCategories =
+        respuesta.tipo_respuesta === 'no_encontrado' ||
+        (respuesta.tipo_respuesta === 'video' && respuesta.signo_encontrado && !respuesta.url_video);
+
+      const categoryOptions = shouldFetchCategories
+        ? await api
+            .obtenerCategorias()
+            .then((resultado) => resultado.categorias)
+            .catch(() => [])
+        : [];
+
+      const urlVideoPermitida = respuesta.url_video;
+      const isCorrectResponse =
+        respuesta.tipo_respuesta === 'video' &&
+        respuesta.signo_encontrado &&
+        Boolean(urlVideoPermitida);
+      const nextCorrectCount = correctResponseCount + (isCorrectResponse ? 1 : 0);
+      const shouldInsertPrompt =
+        isCorrectResponse &&
+        nextCorrectCount >= 5 &&
+        !insertedGamePrompt &&
+        !messages.some((m) => m.gamePrompt);
+
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => !m.isLoading);
+
+        let systemMessage: Message;
+        if (respuesta.tipo_respuesta === 'compilacion') {
+          systemMessage = {
+            id: `msg-${Date.now()}-response`,
+            type: 'system',
+            text: respuesta.respuesta_ia,
+            videosCompilacion: respuesta.videos_compilacion || [],
+          };
+        } else if (respuesta.tipo_respuesta === 'desambiguacion') {
+          systemMessage = {
+            id: `msg-${Date.now()}-response`,
+            type: 'system',
+            text: respuesta.respuesta_ia,
+            disambiguationWord: respuesta.palabra_clave || mensajeActual,
+            disambiguationOptions: respuesta.opciones || [],
+          };
+        } else if (respuesta.tipo_respuesta === 'video' && respuesta.signo_encontrado) {
+          const videoMissing = !urlVideoPermitida;
+          systemMessage = {
+            id: `msg-${Date.now()}-response`,
+            type: 'system',
+            text: '',
+            videoUrl: urlVideoPermitida || undefined,
+            signLabel: respuesta.palabra_clave
+              ? respuesta.palabra_clave.replace(/_/g, ' ')
+              : undefined,
+            noVideoAvailable: videoMissing,
+            categoryPrompt: videoMissing,
+            categories: videoMissing ? categoryOptions : undefined,
+          };
+        } else if (respuesta.tipo_respuesta === 'error_backend') {
+          systemMessage = {
+            id: `msg-${Date.now()}-response`,
+            type: 'system',
+            text: respuesta.respuesta_ia,
+            backendError: true,
+          };
+        } else {
+          systemMessage = {
+            id: `msg-${Date.now()}-response`,
+            type: 'system',
+            text: respuesta.respuesta_ia,
+            notFound: true,
+            notFoundWord: mensajeActual,
+            categoryPrompt: true,
+            categories: categoryOptions,
+          };
+        }
+
+        // Mensaje de juegos: botón único que navega a /games
+        const gamePromptMessage: Message | null = shouldInsertPrompt
+          ? {
+              id: `msg-${Date.now()}-game`,
+              type: 'system',
+              text: '¡Vas muy bien! ¿Quieres poner a prueba lo que has aprendido?',
+              gamePrompt: true,
+              games: [],         // lista vacía — el render usará el botón de navegación
+            }
+          : null;
+
+        // Contar mensajes de usuario para insertar quetzal tip
+        const userMessageCount = filtered.filter((m) => m.type === 'user').length;
+        const shouldInsertQuetzalTip = userMessageCount === 1 || (userMessageCount - 1) % 10 === 0;
+        
+        if (shouldInsertQuetzalTip) {
+          setShowQuetzalTip(true);
+        }
+
+        return [
+          ...filtered,
+          systemMessage,
+          ...(gamePromptMessage ? [gamePromptMessage] : []),
+        ];
+      });
+
+      if (isCorrectResponse) {
+        setCorrectResponseCount((prev) => prev + 1);
+      }
+      if (shouldInsertPrompt) {
+        setInsertedGamePrompt(true);
+      }
+
+    } catch (_error) {
+      setMessages(prev => {
+        const filtered = prev.filter(m => !m.isLoading);
+        return [
+          ...filtered,
+          {
+            id: `msg-${Date.now()}-error`,
+            type: 'system',
+            text: 'No se pudo conectar con el backend. Revisa que el servidor este encendido.',
+            backendError: true,
+          },
+        ];
+      });
+    }
+
+    if (currentConversationId && conversations.some((conv) => conv.id === currentConversationId)) {
+      setConversations(prev =>
+        prev.map(conv =>
+          conv.id === currentConversationId
+            ? {
+                ...conv,
+                lastMessage: mensajeActual,
+                name: messages.length === 0 ? mensajeActual.slice(0, 30) : conv.name,
+                timestamp: new Date()
+              }
+            : conv
+        )
+      );
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!inputText.trim()) return;
+    const mensajeActual = inputText;
+    setInputText('');
+    await enviarMensaje(mensajeActual);
+  };
+
+  const handleSelectDisambiguation = async (word: string, clave: string, label: string) => {
+    await enviarMensaje(word, clave, label);
+  };
+
+  const handleOpenDictionary = () => {
+    navigate('/dictionary');
+  };
+
+  const handleSelectCategory = (category: string) => {
+    navigate(`/dictionary?category=${encodeURIComponent(category)}`);
+  };
+
+  const handleExploreCategory = async (categoryId: string, categoryLabel: string) => {
+    try {
+      setMessages((prev) => [...prev, {
+        id: `msg-${Date.now()}-loading`,
+        type: 'system',
+        text: '',
+        isLoading: true,
+      }]);
+
+      const resultado = await api.obtenerSignosPorCategoria(categoryId);
+
+      if (!resultado || !resultado.signos) {
+        throw new Error('Respuesta inválida de la API');
+      }
+
+      const signosArray = Array.isArray(resultado.signos) ? resultado.signos : [];
+
+      // Reemplazar guiones bajos por espacios en todas las palabras
+      const palabras = signosArray
+        .filter(signo => signo && signo.palabra && signo.url_video)
+        .map(signo => signo.palabra.replace(/_/g, ' '));
+
+      const categoryMessage: Message = {
+        id: `msg-${Date.now()}-category`,
+        type: 'system',
+        text: palabras.length > 0
+          ? `Aquí están las palabras de ${categoryLabel}:`
+          : `Se encontraron ${signosArray.length} palabras en ${categoryLabel}, pero ninguna tiene video disponible.`,
+        wordsList: palabras.length > 0 ? palabras : [],
+      };
+
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => !m.isLoading);
+        return [...filtered, categoryMessage];
+      });
+    } catch (error) {
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => !m.isLoading);
+        return [...filtered, {
+          id: `msg-${Date.now()}-error`,
+          type: 'system',
+          text: `Error al cargar las palabras de ${categoryLabel}. Por favor, intenta de nuevo.`,
+        }];
+      });
+    }
+  };
+
+  const showWelcome = messages.length === 0;
+  const charCount = inputText.length;
+  const maxChars = 500;
+  const activeVideoMessageId = [...messages]
+    .reverse()
+    .find((message) => message.type === 'system' && (Boolean(message.videoUrl) || Boolean(message.videos?.length) || Boolean(message.videosCompilacion?.length)))?.id;
+
+  return (
+    <div className="flex h-screen w-screen rounded-none overflow-hidden bg-[#f7f8fa] dark:bg-[rgba(10,10,10,0.82)]">
+      <div className={`hidden md:block h-full ${isSidebarCollapsed ? 'w-16' : 'w-80'} transition-all duration-200 ease-in-out`}>
+        <Sidebar
+          conversations={conversations}
+          currentConversationId={currentConversationId}
+          userName={user.name}
+          userEmail={user.email}
+          avatarUrl={user.avatar_url}
+          onNewConversation={handleNewConversation}
+          onSelectConversation={handleSelectConversation}
+          onDeleteConversation={handleDeleteConversationFromSidebar}
+          isCollapsed={isSidebarCollapsed}
+        />
+      </div>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar conversación?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta acción no se puede deshacer. Se eliminará permanentemente esta conversación
+              y todos sus mensajes.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConversation}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <WordNotFoundDialog
+        word={notFoundWord}
+        open={showNotFoundDialog}
+        onOpenChange={setShowNotFoundDialog}
+      />
+
+      <div className="flex-1 flex flex-col min-h-0 bg-[linear-gradient(180deg,#dff0ff_0%,#f3ecde_100%)] dark:bg-[linear-gradient(180deg,#0a0a0a_0%,#101010_100%)] overflow-hidden">
+
+        <div className="sticky top-0 z-40 bg-transparent">
+          <Navbar
+            title="Chat"
+            onToggleSidebar={() => setIsSidebarCollapsed((prev: boolean) => !prev)}
+            onClearConversation={handleClearConversation}
+            onSearch={handleNavbarSearch}
+            activePage="chat"
+          />
+
+          {messages.length > 0 && (
+            <div className="px-2 md:px-3 py-1 bg-[#dff0ff]/60 dark:bg-[rgba(10,10,10,0.5)] border-b border-black/5 dark:border-white/10 overflow-x-auto" style={{ scrollbarGutter: 'stable' }}>
+              <div className="max-w-3xl mx-auto">
+                <div className="flex gap-2 flex-nowrap overflow-x-auto" style={{ scrollbarGutter: 'stable', paddingBottom: '4px' }}>
+                  <span className="text-[11px] md:text-sm font-semibold text-[#4997D0] whitespace-nowrap flex-shrink-0 pr-3 mt-1.5" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                    Explora las siguientes categorías:
+                  </span>
+                  {WELCOME_CATEGORIES.map((category, index) => (
+                    <Button
+                      key={index}
+                      variant="outline"
+                      onClick={() => handleExploreCategory(category.id, category.label)}
+                      className="border-[#4997D0]/70 dark:border-[#3f3f3f] bg-white/70 dark:bg-white/5 text-[#4997D0] dark:text-[#dcdcdc] backdrop-blur-sm hover:bg-[#4997D0] dark:hover:bg-[#2a2a2a] hover:text-white text-[11px] md:text-xs h-7 md:h-8 py-1 px-2 md:px-3 whitespace-nowrap flex-shrink-0"
+                    >
+                      {category.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div
+          className="content-area flex-1 overflow-y-auto pb-[200px] md:pb-0 pr-1"
+          style={{ scrollbarGutter: 'stable' }}
+        >
+          <div className="max-w-3xl mx-auto px-2 md:px-3 py-2 md:py-4">
+            {showWelcome ? (
+              <div className="min-h-[63vh] md:min-h-[68vh] flex items-center justify-center -mt-5 md:-mt-8 px-2 md:px-4">
+                <div className="w-full max-w-2xl text-center px-2 md:px-4 py-2 md:py-3">
+                  <img
+                    src="/logo1.png"
+                    alt="SEGUA Logo"
+                    width={168}
+                    height={168}
+                    loading="eager"
+                    decoding="async"
+                    className="w-20 h-20 md:w-32 md:h-32 mx-auto mb-2 md:mb-4"
+                  />
+                  <h2 className="text-base md:text-2xl font-semibold mb-1.5 md:mb-2.5 tracking-tight" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                    ¡Bienvenido a SEGUA!
+                  </h2>
+                  <p className="text-foreground/80 mb-3 md:mb-4 max-w-xl mx-auto text-xs md:text-sm px-1 md:px-2 leading-relaxed" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                    Escribe una palabra o frase en español y te mostraré su seña en
+                    Lengua de Señas de Guatemala.
+                  </p>
+                  <div className="space-y-1.5 md:space-y-2">
+                    <p className="text-xs md:text-sm font-medium text-muted-foreground" style={{ fontFamily: 'Poppins, sans-serif' }}>
+                      Explora estas categorías:
+                    </p>
+                    <div className="flex flex-wrap gap-2 justify-center px-2 py-1">
+                      {WELCOME_CATEGORIES.map((category, index) => (
+                        <Button
+                          key={index}
+                          variant="outline"
+                          onClick={() => handleExploreCategory(category.id, category.label)}
+                          className="border-[#4997D0]/70 dark:border-[#3f3f3f] bg-white/70 dark:bg-white/5 text-[#4997D0] dark:text-[#dcdcdc] backdrop-blur-sm hover:bg-[#4997D0] dark:hover:bg-[#2a2a2a] hover:text-white text-[11px] md:text-xs h-7 md:h-8 py-1 px-2 md:px-3 whitespace-nowrap"
+                        >
+                          {category.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-2.5 md:mt-4 px-1">
+                    <Button
+                      onClick={handleOpenDictionary}
+                      className="bg-[#4997D0]/90 dark:bg-[#1d1d1d]/90 border border-white/55 dark:border-white/10 backdrop-blur-sm hover:bg-[#3A7FB8] dark:hover:bg-[#2a2a2a] w-full md:w-auto text-xs md:text-sm h-9 md:h-10 py-2 px-4 md:px-5"
+                    >
+                      <BookOpen className="w-3.5 h-3.5 md:w-4 md:h-4 mr-1.5" />
+                      Explorar Diccionario
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div>
+                {messages.map((message) => (
+                  <ChatMessage
+                    key={message.id}
+                    message={message}
+                    onRequestWord={handleRequestWord}
+                    onSelectDisambiguation={handleSelectDisambiguation}
+                    onSelectCategory={handleSelectCategory}
+                    onOpenDictionary={handleOpenDictionary}
+                    isActiveVideo={message.id === activeVideoMessageId}
+                    onSendMessage={(word: string) => enviarMensaje(word)}
+                    onNavigateToGames={() => navigate('/games')}
+                  />
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="fixed bottom-[68px] left-0 right-0 md:relative md:bottom-auto bg-white/60 dark:bg-[rgba(18,18,18,0.9)] backdrop-blur-md px-4 md:p-7 border-t border-black/5 dark:border-white/10 z-30 md:z-auto md:bg-transparent" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+          <div className="max-w-3xl mx-auto">
+            <div className="chat-input flex items-end gap-3 rounded-[16px] p-3 bg-white/72 dark:bg-[rgba(18,18,18,0.78)] border border-black/5 dark:border-white/10 backdrop-blur-md">
+              <div className="flex-1 relative">
+                <InputWithSuggestions
+                  value={inputText}
+                  onChange={setInputText}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                  placeholder="Escribe una palabra o frase..."
+                  maxChars={maxChars}
+                  onSelectSuggestion={() => {}}
+                />
+                <div className="absolute bottom-0.5 right-1 text-[9px] md:text-xs text-muted-foreground">
+                  {charCount}/{maxChars}
+                </div>
+              </div>
+              <Button
+                onClick={handleSendMessage}
+                disabled={!inputText.trim()}
+                className="h-[34px] md:h-[38px] px-3 md:px-4 bg-[#4997D0] dark:bg-[#1f1f1f] hover:bg-[#3A7FB8] dark:hover:bg-[#2c2c2c] rounded-none"
+              >
+                <Send className="w-3 md:w-3.5 h-3 md:h-3.5" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {showWelcome && showWelcomeBubble && (
+        <WelcomeChatBubble onDismiss={() => setShowWelcomeBubble(false)} />
+      )}
+
+      <QuetzalTipFloating
+        isVisible={showQuetzalTip}
+        onClose={() => setShowQuetzalTip(false)}
+      />
+
+      <BottomNav />
+    </div>
+  );
+}
